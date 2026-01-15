@@ -7,6 +7,7 @@ import pyvista as pv
 import time
 from datetime import timedelta
 from tqdm import tqdm
+from scipy.sparse.linalg import gmres
 
 import taichi as ti
 import taichi.math as tm
@@ -18,10 +19,10 @@ vec3_int = ti.types.vector(3, ti.i32)
 
 start_time = time.perf_counter()
 c = 3e8
-# f = 112e8
-# wavelength = c/f
-wavelength = 1
-f = c/wavelength
+f = 112e8
+wavelength = c/f
+# wavelength = 1
+# f = c/wavelength
 k = 2*np.pi/wavelength
 R = np.linspace(0.01, 2, 500)
 H0 = special.hankel1(0, k * R)
@@ -29,7 +30,8 @@ w = 2*np.pi*f
 u = 4*np.pi*1e-7
 epsilon = 8.85*1e-12
 
-mesh = meshio.read(r"plane50points.msh")
+# mesh = meshio.read(r"plane50points.msh")
+mesh = meshio.read(r"MoM_Test_Plane-TestPlane.msh")
 points_np = mesh.points.astype(np.float64)
 triangles_np = mesh.cells_dict["triangle"].astype(np.int32)
 
@@ -67,7 +69,7 @@ for i in range(n_points):
 for i in range(n_tri):
     triangles_ti[i] = triangles_np[i]   
 
-nop = 16
+nop = 7
 ############## 7 point
 if nop == 7:
     alpha = ti.Vector([0.3333, 0.0597, 0.4701, 0.4701, 0.7974, 0.1013, 0.1013])
@@ -184,13 +186,6 @@ for i in range(len(triangles_np)):
     )
 
 complex_vector = ti.Vector.field(n=2, dtype=ti.f32, shape=(3,))
-
-@ti.func
-def c_mul(a: vec2, b: vec2) -> vec2:
-    return vec2(
-        a[0] * b[0] - a[1] * b[1],
-        a[0] * b[1] + a[1] * b[0]
-    )
     
 @ti.func
 def c_exp_j(theta: float) -> vec2:
@@ -235,9 +230,9 @@ def func_singularity(rp: vec3, rq: vec3, rp_type: ti.i32, rq_type: ti.i32,
         first_term = vec2(0, w*u/4) * tm.dot(rho_rp, rho_rq) - vec2(0, 1/(w*epsilon)) * sign_rp * sign_rq
         eps = 1e-12
         if distance < eps:
-            first_term *= vec2(0, -k)
+            first_term = tm.cmul(first_term, vec2(0, -k))
         else:
-            first_term *= (c_exp_j(-1 * k * distance) - vec2(1, 0)) / distance
+            first_term = tm.cmul(first_term,(c_exp_j(-1 * k * distance) - vec2(1, 0)) / distance)
         
         final_result = first_term
     else:
@@ -271,7 +266,7 @@ def get_I1I2(tin: ti.i32, obv_point: vec3, ncap: vec3):
     I2 = 0.0
     p1 = vec3(0.0,0.0,0.0)
     p2 = vec3(0.0,0.0,0.0)
-    for i in range(0,3):
+    for i in ti.static(range(0,3)):
         if i == 2:
             p1 = tri0
             p2 = tri2
@@ -331,33 +326,25 @@ def double_integration(vout1: vec3, vout2: vec3, vout3: vec3,
                        rp_type: ti.i32, rq_type: ti.i32, 
                        rp_free: vec3, rq_free: vec3, 
                        tout: ti.i32, tin: ti.i32) -> vec2:
-    ######## REMOVING AREA FROM THIS FUNCTION SINCE IT CANCELS OUT IN THE FINAL EQUATION
+
     final_result = vec2(0.0, 0.0)
     shared = get_triangle_relationship(tin, tout)
     if shared < 2:
-        # Non-singular case
-        for i in range(nop):  # Changed from range(0, len(w_gauss))
+        for i in range(nop):
             location_out = alpha[i]*vout1 + beta[i]*vout2 + gamma[i]*vout3
             result = vec2(0.0, 0.0)
-            for j in range(nop):  # Changed from range(0, len(w_gauss))
+            for j in range(nop):
                 location_in = alpha[j]*vin1 + beta[j]*vin2 + gamma[j]*vin3
                 result += func(location_out, location_in, rp_type, rq_type, rp_free, rq_free) * w_gauss[j]
             final_result += result * w_gauss[i]
     else:
-        # Singular case
-        for i in range(nop):  # Changed from range(0, len(w_gauss))
+        for i in range(nop): 
             location_out = alpha[i]*vout1 + beta[i]*vout2 + gamma[i]*vout3
-            result = vec2(0.0, 0.0)
-            
-            # Inner integration
-            for j in range(nop):  # Changed from range(0, len(w_gauss))
+            result = vec2(0.0, 0.0)          
+            for j in range(nop): 
                 location_in = alpha[j]*vin1 + beta[j]*vin2 + gamma[j]*vin3
                 result += func_singularity(location_out, location_in, rp_type, rq_type, 
                                           rp_free, rq_free, tout, tin, 1) * w_gauss[j]
-            
-            # Outer singularity term (doesn't depend on location_in)
-            # Note: location_in here should probably be location_out or a specific point
-            # I'm using location_out as it makes more sense
             result += func_singularity(location_out, location_out, rp_type, rq_type, 
                                       rp_free, rq_free, tout, tin, 0)
             
@@ -491,28 +478,28 @@ def get_Z():
             Imneg_nneg = double_integration(
                 mth_basis.free_neg, mth_basis.cp1, mth_basis.cp2, 
                 nth_basis.free_neg, nth_basis.cp1, nth_basis.cp2, 
-                0, 0, nth_basis.free_neg, mth_basis.free_neg, 
+                0, 0, mth_basis.free_neg, nth_basis.free_neg, 
                 mth_basis.neg_tri, nth_basis.neg_tri
             )
             
             Imneg_npos = double_integration(
                 mth_basis.free_neg, mth_basis.cp1, mth_basis.cp2, 
                 nth_basis.free_pos, nth_basis.cp1, nth_basis.cp2, 
-                0, 1, nth_basis.free_pos, mth_basis.free_neg, 
+                0, 1, mth_basis.free_neg, nth_basis.free_pos, 
                 mth_basis.neg_tri, nth_basis.pos_tri
             )
             
             Impos_nneg = double_integration(
                 mth_basis.free_pos, mth_basis.cp1, mth_basis.cp2, 
                 nth_basis.free_neg, nth_basis.cp1, nth_basis.cp2, 
-                1, 0, nth_basis.free_neg, mth_basis.free_pos, 
+                1, 0, mth_basis.free_pos, nth_basis.free_neg, 
                 mth_basis.pos_tri, nth_basis.neg_tri
             )
             
             Impos_npos = double_integration(
                 mth_basis.free_pos, mth_basis.cp1, mth_basis.cp2, 
                 nth_basis.free_pos, nth_basis.cp1, nth_basis.cp2, 
-                1, 1, nth_basis.free_pos, mth_basis.free_pos, 
+                1, 1, mth_basis.free_pos, nth_basis.free_pos, 
                 mth_basis.pos_tri, nth_basis.pos_tri
             )
             
@@ -522,20 +509,32 @@ def get_Z():
 
 get_Z()
 
-# Convert Taichi fields to NumPy
 Z_np = Z.to_numpy()
 I_np = I.to_numpy()
 
-# Convert to complex arrays
 Z_complex = Z_np[:, :, 0] + 1j * Z_np[:, :, 1]
 I_complex = I_np[:, 0] + 1j * I_np[:, 1]
 
-# Round for numerical stability
 Z_complex = np.round(Z_complex, 12)
 I_complex = np.round(I_complex, 12)
-
-# Solve the linear system
+# np.save("taichi_Z_gmres.npy", Z_complex)
 coeff = np.linalg.solve(Z_complex, I_complex)
+# print("Solving with GMRES...")
+# coeff, info = gmres(
+#     Z_complex, 
+#     I_complex
+# )
+
+# if info == 0:
+#     print("✓ GMRES converged successfully")
+#     residual = np.linalg.norm(Z_complex @ coeff - I_complex)
+#     print(f"Residual: {residual:.6e}")
+# else:
+#     print(f"✗ GMRES did not converge (info={info})")
+
+coeff_ti = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(N,))
+for i in range(N):
+    coeff_ti[i] = vec2(coeff[i].real, coeff[i].imag)
 
 for i in tqdm(range(N), desc="Assembling colors"):
     ith_basis = all_basis[i]
@@ -578,5 +577,106 @@ mesh = pv.PolyData(vertices, faces)
 mesh.cell_data["Magnitude"] = np.array(scalars)
 
 mag = np.array(scalars)
-vmin, vmax = 0, mag.max()  # or fixed global range
-mesh.save("mesh50_taichi.vtk")
+vmin, vmax = 0, mag.max()
+mesh.save("mesh50_taichi_gmres.vtk")
+
+@ti.func
+def realVec_mul_complexScalar(realVec: vec3, complexScalar: vec2) -> ti.types.matrix(3, 2, ti.f64):
+    result = ti.Matrix([
+        [realVec[0]*complexScalar[0], realVec[0]*complexScalar[1]],  # x-component (complex)
+        [realVec[1]*complexScalar[0], realVec[1]*complexScalar[1]],  # y-component (complex)
+        [realVec[2]*complexScalar[0], realVec[2]*complexScalar[1]]   # z-component (complex)
+    ])
+    return result
+
+@ti.func
+def complexVec_mul_complexScalar(complexVec: ti.types.matrix(3, 2, ti.f64), complexScalar: vec2) -> ti.types.matrix(3, 2, ti.f64):
+    x_comp = vec2(complexVec[0,0],complexVec[0,1])
+    y_comp = vec2(complexVec[1,0],complexVec[1,1])
+    z_comp = vec2(complexVec[2,0],complexVec[2,1])
+    x_prod = tm.cmul(x_comp, complexScalar)
+    y_prod = tm.cmul(y_comp, complexScalar)
+    z_prod = tm.cmul(z_comp, complexScalar)
+    result = ti.Matrix([
+        [x_prod[0], x_prod[1]],  # x-component (complex)
+        [y_prod[0], y_prod[1]],  # y-component (complex)
+        [z_prod[0], z_prod[1]]   # z-component (complex)
+    ])
+    return result
+
+@ti.func
+def far_field(rhat: vec3, m: ti.i32, r: ti.f64):
+    mth_basis = all_basis_ti[m]
+    # result_neg = np.array([0,0,0], dtype = complex)
+    result_neg = ti.Matrix([
+        [0.0, 0.0],  # x-component (complex)
+        [0.0, 0.0],                         # y-component (complex)
+        [0.0, 0.0]                          # z-component (complex)
+    ])
+    # result_pos = np.array([0,0,0], dtype = complex)
+    result_pos = ti.Matrix([
+        [0.0, 0.0],  # x-component (complex)
+        [0.0, 0.0],                         # y-component (complex)
+        [0.0, 0.0]                          # z-component (complex)
+    ])
+    for i in range(0,nop):
+        location_neg = alpha[i]*mth_basis.free_neg + beta[i]*mth_basis.cp1 + gamma[i]*mth_basis.cp2
+        rho_neg = location_neg - mth_basis.free_neg
+        neg_exp = c_exp_j(k*tm.dot(rhat, rho_neg))
+        result_neg += realVec_mul_complexScalar(w_gauss[i]*rho_neg, neg_exp)
+
+        location_pos = alpha[i]*mth_basis.free_pos + beta[i]*mth_basis.cp1+ gamma[i]*mth_basis.cp2
+        rho_pos = mth_basis.free_pos - location_pos
+        pos_exp = c_exp_j(k*tm.dot(rhat, rho_pos))
+        result_pos += realVec_mul_complexScalar(w_gauss[i]*rho_pos, pos_exp)
+    
+    return tm.cmul(vec2(0,-w*u),c_exp_j(-k*r))*mth_basis.edge_length*complexVec_mul_complexScalar((result_neg + result_pos),coeff_ti[m])/(8*tm.pi*r)
+
+observations = 1000
+observation_values = {}
+theta = np.linspace(-np.pi, np.pi, num = observations)
+r = 1
+phi = 0
+for angles in tqdm(theta):
+    rhat = np.array([np.sin(angles)*np.cos(phi), np.sin(angles)*np.sin(phi), np.cos(angles)])
+    observation_values[angles] = 0
+    for m in range(0,N):
+        observation_values[angles] += far_field(rhat, m, r)
+
+
+angles = np.array(list(observation_values.keys()))
+E_vectors = np.array(list(observation_values.values()))
+E_magnitude = np.linalg.norm(E_vectors, axis=1)
+
+eps = 1e-16
+
+E_mag = np.abs(E_magnitude)
+
+E_mag_norm = E_mag / (np.max(E_mag) + eps)
+
+E_dB = 20.0 * np.log10(E_mag_norm + eps)
+
+E_dB_clipped = np.clip(E_dB, a_min=-60.0, a_max=None)
+
+plt.figure(figsize=(7,5))
+plt.plot(np.degrees(angles), E_dB_clipped)
+plt.xlabel("Theta (degrees)")
+plt.ylabel("Normalized |E(θ)| (dB)")
+plt.title("Far-Field Radiation Pattern")
+plt.grid(True)
+plt.tight_layout()
+plt.savefig("fftaichi.png", dpi=200)
+# plt.show()
+
+plt.figure(figsize=(6,6))
+ax = plt.subplot(111, polar=True)
+ax.plot(angles, E_mag_norm) 
+ax.set_title("Normalized Far-Field Pattern (Polar)")
+plt.tight_layout()
+plt.savefig("pptaichi.png", dpi=200)
+# plt.show()
+
+
+
+duration = timedelta(seconds=time.perf_counter()-start_time)
+print(duration)
