@@ -11,6 +11,15 @@ from scipy.sparse.linalg import gmres
 
 import taichi as ti
 import taichi.math as tm
+
+from pathlib import Path
+from datetime import datetime
+
+# Create folder with timestamp
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+output_folder = Path(f"results/simulation_{timestamp}")
+output_folder.mkdir(parents=True, exist_ok=True)
+
 ti.init(arch=ti.cpu, default_fp=ti.f64)
 
 vec2 = ti.types.vector(2, ti.f64)
@@ -32,6 +41,9 @@ epsilon = 8.85*1e-12
 
 # mesh = meshio.read(r"plane50points.msh")
 mesh = meshio.read(r"MoM_Test_Plane-TestPlane.msh")
+nop = 7
+
+configuration_name = "Plane_35Points_nop7_f112e8"
 points_np = mesh.points.astype(np.float64)
 triangles_np = mesh.cells_dict["triangle"].astype(np.int32)
 
@@ -69,7 +81,7 @@ for i in range(n_points):
 for i in range(n_tri):
     triangles_ti[i] = triangles_np[i]   
 
-nop = 7
+
 ############## 7 point
 if nop == 7:
     alpha = ti.Vector([0.3333, 0.0597, 0.4701, 0.4701, 0.7974, 0.1013, 0.1013])
@@ -517,8 +529,15 @@ I_complex = I_np[:, 0] + 1j * I_np[:, 1]
 
 Z_complex = np.round(Z_complex, 12)
 I_complex = np.round(I_complex, 12)
-# np.save("taichi_Z_gmres.npy", Z_complex)
 coeff = np.linalg.solve(Z_complex, I_complex)
+
+Z_file_name = configuration_name + "_Z.npy"
+I_file_name = configuration_name + "_I.npy"
+coeff_file_name = configuration_name + "_coeff.npy"
+np.save(output_folder/Z_file_name, Z_complex)
+np.save(output_folder/I_file_name, I_complex)
+np.save(output_folder/coeff_file_name, coeff)
+
 # print("Solving with GMRES...")
 # coeff, info = gmres(
 #     Z_complex, 
@@ -576,7 +595,8 @@ mesh.cell_data["Magnitude"] = np.array(scalars)
 
 mag = np.array(scalars)
 vmin, vmax = 0, mag.max()
-mesh.save("mesh50_taichi_gmres.vtk")
+mesh_file_name = configuration_name + "_mesh.vtk"
+mesh.save(output_folder/mesh_file_name)
 
 @ti.func
 def realVec_mul_complexScalar(realVec: vec3, complexScalar: vec2) -> ti.types.matrix(3, 2, ti.f64):
@@ -596,26 +616,24 @@ def complexVec_mul_complexScalar(complexVec: ti.types.matrix(3, 2, ti.f64), comp
     y_prod = tm.cmul(y_comp, complexScalar)
     z_prod = tm.cmul(z_comp, complexScalar)
     result = ti.Matrix([
-        [x_prod[0], x_prod[1]],  # x-component (complex)
-        [y_prod[0], y_prod[1]],  # y-component (complex)
-        [z_prod[0], z_prod[1]]   # z-component (complex)
+        [x_prod[0], x_prod[1]],  
+        [y_prod[0], y_prod[1]],  
+        [z_prod[0], z_prod[1]]   
     ])
     return result
 
 @ti.func
 def far_field(rhat: vec3, m: ti.i32, r: ti.f64):
     mth_basis = all_basis_ti[m]
-    # result_neg = np.array([0,0,0], dtype = complex)
     result_neg = ti.Matrix([
-        [0.0, 0.0],  # x-component (complex)
-        [0.0, 0.0],                         # y-component (complex)
-        [0.0, 0.0]                          # z-component (complex)
+        [0.0, 0.0], 
+        [0.0, 0.0],                   
+        [0.0, 0.0]                        
     ])
-    # result_pos = np.array([0,0,0], dtype = complex)
     result_pos = ti.Matrix([
-        [0.0, 0.0],  # x-component (complex)
-        [0.0, 0.0],                         # y-component (complex)
-        [0.0, 0.0]                          # z-component (complex)
+        [0.0, 0.0],  
+        [0.0, 0.0],                 
+        [0.0, 0.0]                      
     ])
     for i in range(0,nop):
         location_neg = alpha[i]*mth_basis.free_neg + beta[i]*mth_basis.cp1 + gamma[i]*mth_basis.cp2
@@ -692,10 +710,8 @@ E_dB_clipped = np.clip(E_dB, a_min=-60.0, a_max=None)
 angles = theta_np
 
 print("Far field computation complete!")
-
-# Plotting (same as before)
-import matplotlib.pyplot as plt
-
+far_field_plot_file_name = configuration_name + "_farField.png"
+polar_plot_file_name = configuration_name + "_polarPlot.png"
 plt.figure(figsize=(7, 5))
 plt.plot(np.degrees(angles), E_dB_clipped)
 plt.xlabel("Theta (degrees)")
@@ -703,15 +719,14 @@ plt.ylabel("Normalized |E(θ)| (dB)")
 plt.title("Far-Field Radiation Pattern")
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("ff_taichi_new.png", dpi=200)
+plt.savefig(output_folder/far_field_plot_file_name, dpi=200)
 
 plt.figure(figsize=(6, 6))
 ax = plt.subplot(111, polar=True)
 ax.plot(angles, E_mag_norm)
 ax.set_title("Normalized Far-Field Pattern (Polar)")
 plt.tight_layout()
-plt.savefig("pp_taichi_new.png", dpi=200)
-# plt.show()
+plt.savefig(output_folder/polar_plot_file_name, dpi=200)
 
 duration = timedelta(seconds=time.perf_counter()-start_time)
 print(duration)
