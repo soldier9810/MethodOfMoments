@@ -559,8 +559,6 @@ for key in organized_triangles:
     organized_triangles[key] = organized_triangles[key]/max_current
 
 print("Done getting organized_triangles")
-duration = timedelta(seconds=time.perf_counter()-start_time)
-print(duration)
 
 vertices = []
 faces = []
@@ -629,54 +627,91 @@ def far_field(rhat: vec3, m: ti.i32, r: ti.f64):
         rho_pos = mth_basis.free_pos - location_pos
         pos_exp = c_exp_j(k*tm.dot(rhat, rho_pos))
         result_pos += realVec_mul_complexScalar(w_gauss[i]*rho_pos, pos_exp)
-    
-    return tm.cmul(vec2(0,-w*u),c_exp_j(-k*r))*mth_basis.edge_length*complexVec_mul_complexScalar((result_neg + result_pos),coeff_ti[m])/(8*tm.pi*r)
+    term1 = tm.cmul(vec2(0,-w*u),c_exp_j(-k*r))*mth_basis.edge_length
+    term2 = complexVec_mul_complexScalar((result_neg + result_pos),coeff_ti[m])/(8*tm.pi*r)
+    return complexVec_mul_complexScalar(term2, term1)
 
 observations = 1000
-observation_values = {}
-theta = np.linspace(-np.pi, np.pi, num = observations)
-r = 1
-phi = 0
-for angles in tqdm(theta):
-    rhat = np.array([np.sin(angles)*np.cos(phi), np.sin(angles)*np.sin(phi), np.cos(angles)])
-    observation_values[angles] = 0
-    for m in range(0,N):
-        observation_values[angles] += far_field(rhat, m, r)
+theta_np = np.linspace(-np.pi, np.pi, num=observations)
+r = 1.0
+phi = 0.0
 
+# Taichi fields for results
+E_field = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(observations, 3))  # Complex E-field vectors
+E_magnitude = ti.field(dtype=ti.f64, shape=(observations,))
 
-angles = np.array(list(observation_values.keys()))
-E_vectors = np.array(list(observation_values.values()))
-E_magnitude = np.linalg.norm(E_vectors, axis=1)
+@ti.kernel
+def compute_far_field(theta_values: ti.types.ndarray(), r_val: ti.f64, phi_val: ti.f64):
+    """Compute far field for all observation angles"""
+    for obs_idx in range(observations):
+        angle = theta_values[obs_idx]
+        
+        # Compute rhat
+        sin_theta = ti.sin(angle)
+        cos_theta = ti.cos(angle)
+        sin_phi = ti.sin(phi_val)
+        cos_phi = ti.cos(phi_val)
+        
+        rhat = vec3(sin_theta * cos_phi, sin_theta * sin_phi, cos_theta)
+        
+        # Sum contributions from all basis functions
+        E_total = ti.Matrix([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+        
+        for m in range(N):
+            E_m = far_field(rhat, m, r_val)
+            for j in ti.static(range(3)):
+                E_total[j, 0] += E_m[j, 0]
+                E_total[j, 1] += E_m[j, 1]
+        
+        # Store result
+        for j in ti.static(range(3)):
+            E_field[obs_idx, j] = vec2(E_total[j, 0], E_total[j, 1])
+        
+        # Compute magnitude: sqrt(|Ex|^2 + |Ey|^2 + |Ez|^2)
+        mag_sq = 0.0
+        for j in ti.static(range(3)):
+            # |complex|^2 = real^2 + imag^2
+            mag_sq += E_total[j, 0] * E_total[j, 0] + E_total[j, 1] * E_total[j, 1]
+        
+        E_magnitude[obs_idx] = ti.sqrt(mag_sq)
 
+# Run the computation
+print("Computing far field pattern with Taichi...")
+compute_far_field(theta_np, r, phi)
+
+# Extract results to NumPy
+E_mag = E_magnitude.to_numpy()
+
+# Normalize and convert to dB
 eps = 1e-16
-
-E_mag = np.abs(E_magnitude)
-
 E_mag_norm = E_mag / (np.max(E_mag) + eps)
-
 E_dB = 20.0 * np.log10(E_mag_norm + eps)
-
 E_dB_clipped = np.clip(E_dB, a_min=-60.0, a_max=None)
 
-plt.figure(figsize=(7,5))
+# For plotting
+angles = theta_np
+
+print("Far field computation complete!")
+
+# Plotting (same as before)
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(7, 5))
 plt.plot(np.degrees(angles), E_dB_clipped)
 plt.xlabel("Theta (degrees)")
 plt.ylabel("Normalized |E(θ)| (dB)")
 plt.title("Far-Field Radiation Pattern")
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("fftaichi.png", dpi=200)
-# plt.show()
+plt.savefig("ff_taichi_new.png", dpi=200)
 
-plt.figure(figsize=(6,6))
+plt.figure(figsize=(6, 6))
 ax = plt.subplot(111, polar=True)
-ax.plot(angles, E_mag_norm) 
+ax.plot(angles, E_mag_norm)
 ax.set_title("Normalized Far-Field Pattern (Polar)")
 plt.tight_layout()
-plt.savefig("pptaichi.png", dpi=200)
+plt.savefig("pp_taichi_new.png", dpi=200)
 # plt.show()
-
-
 
 duration = timedelta(seconds=time.perf_counter()-start_time)
 print(duration)
