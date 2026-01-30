@@ -36,12 +36,13 @@ w = 2*np.pi*f
 u = 4*np.pi*1e-7
 epsilon = 8.85*1e-12
 
-# mesh = meshio.read(r"plane50points.msh")
+# mesh = meshio.read(r"meshes/plane50points.msh")
 mesh = meshio.read(r"meshes/MoM_Test_Plane-TestPlane.msh")
 # mesh = meshio.read(r"meshes/plane45pointsFDQ_experimental.msh")
 # mesh = meshio.read(r"meshes/plane35pointsDelaunay.msh")
+# mesh = meshio.read(r"meshes/sphere40points.msh")
 nop = 7
-configuration_name = "Plane_35Points_nop7_f112e8"
+configuration_name = "Plane_50Points_nop7"
 
 points_np = mesh.points.astype(np.float64)
 triangles_np = mesh.cells_dict["triangle"].astype(np.int32)
@@ -55,6 +56,8 @@ for i in range(0,len(triangles_np)):
 
 min_corner = np.min(points_np, axis=0)
 max_corner = np.max(points_np, axis=0)
+print(min_corner)
+print(max_corner)
 bbox_center = (min_corner + max_corner) / 2.0
 points_np -= bbox_center
 
@@ -126,30 +129,38 @@ elif nop == 12:
                     0.050844906370207, 0.050844906370207, 0.050844906370207,
                     0.082851075618374, 0.082851075618374, 0.082851075618374,
                     0.082851075618374, 0.082851075618374, 0.082851075618374])
-############# 16 point
+
 elif nop == 16:
-    alpha = ti.Vector([0.081414823414554, 0.081414823414554, 0.837170353641812,
-                    0.658861384496480, 0.658861384496480, 0.316277231295461,
-                    0.316277231295461, 0.024180199784358, 0.024180199784358,
-                    0.024180199784358, 0.310352451033785, 0.636502499121399,
-                    0.636502499121399, 0.636502499121399, 0.053145049844816,
-                    0.053145049844816])
-
-    beta  = ti.Vector([0.081414823414554, 0.837170353641812, 0.081414823414554,
-                    0.316277231295461, 0.024180199784358, 0.658861384496480,
-                    0.024180199784358, 0.658861384496480, 0.024180199784358,
-                    0.316277231295461, 0.053145049844816, 0.053145049844816,
-                    0.310352451033785, 0.310352451033785, 0.636502499121399,
-                    0.636502499121399])
-
+    # Symmetric 16-point rule (Weights sum to 1.0)
+    w_gauss = ti.Vector([
+        0.14431560767778,                                     # Centroid (1 point)
+        0.09509163426728, 0.09509163426728, 0.09509163426728, # Orbit 1 (3 points)
+        0.10321735053038, 0.10321735053038, 0.10321735053038, # Orbit 2 (3 points)
+        0.03245846762319, 0.03245846762319, 0.03245846762319, # Orbit 3 (3 points)
+        0.02723063468594, 0.02723063468594, 0.02723063468594, # Orbit 4 (3 points)
+        0.02723063468594, 0.02723063468594, 0.02723063468594  # Orbit 4 cont. (6 total)
+    ])
+    
+    # Coordinates (Barycentric)
+    alpha = ti.Vector([
+        0.33333333333333,
+        0.08308905341457, 0.45845547329272, 0.45845547329272,
+        0.17056930775176, 0.41471534612412, 0.41471534612412,
+        0.01323171575661, 0.49338414212170, 0.49338414212170,
+        0.04615406080279, 0.75881140104859, 0.19503453814862,
+        0.75881140104859, 0.19503453814862, 0.04615406080279
+    ])
+    
+    beta = ti.Vector([
+        0.33333333333333,
+        0.45845547329272, 0.08308905341457, 0.45845547329272,
+        0.41471534612412, 0.17056930775176, 0.41471534612412,
+        0.49338414212170, 0.01323171575661, 0.49338414212170,
+        0.19503453814862, 0.04615406080279, 0.75881140104859,
+        0.19503453814862, 0.75881140104859, 0.04615406080279
+    ])
+    
     gamma = 1.0 - alpha - beta
-
-    w_gauss     = ti.Vector([0.090817990382754, 0.090817990382754, 0.090817990382754,
-                    0.082851075618374, 0.082851075618374, 0.082851075618374,
-                    0.082851075618374, 0.025731066440455, 0.025731066440455,
-                    0.025731066440455, 0.082851075618374, 0.082851075618374,
-                    0.082851075618374, 0.082851075618374, 0.025731066440455,
-                    0.025731066440455])
 
 ncap_global = []
 
@@ -422,6 +433,11 @@ def electric_field(r: vec3) -> ti.types.matrix(3, 2, float):
         [0.0, 0.0],                         # y-component (complex)
         [0.0, 0.0]                          # z-component (complex)
     ])
+    # result = ti.Matrix([
+    #     [0.0, 0.0],  # x-component (complex)
+    #     [1.0 * phase[0], 1.0 * phase[1]],                         # y-component (complex)
+    #     [0.0, 0.0]                          # z-component (complex)
+    # ])
     return result
 
 @ti.func
@@ -578,7 +594,9 @@ I_complex = I_np[:, 0] + 1j * I_np[:, 1]
 Z_complex = np.round(Z_complex, 12)
 I_complex = np.round(I_complex, 12)
 coeff = np.linalg.solve(Z_complex, I_complex)
-
+print("Coefficients Obtained")
+# cond = np.linalg.cond(Z_complex)
+# print(f"Condition Number: {cond}")
 Z_file_name = configuration_name + "_Z.npy"
 I_file_name = configuration_name + "_I.npy"
 coeff_file_name = configuration_name + "_coeff.npy"
@@ -745,7 +763,8 @@ def compute_far_field(theta_values: ti.types.ndarray(), r_val: ti.f64, phi_val: 
         # Sum contributions from all basis functions
         E_total = ti.Matrix([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
         for m in range(N):
-            E_m = far_field(rhat, m, r_val)
+            m_int = ti.cast(m, ti.i32)
+            E_m = far_field(rhat, m_int, r_val)
             for j in ti.static(range(3)):
                 E_total[j, 0] += E_m[j, 0]
                 E_total[j, 1] += E_m[j, 1]
