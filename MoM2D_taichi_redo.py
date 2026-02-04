@@ -40,8 +40,9 @@ epsilon = 8.85*1e-12
 mesh = meshio.read(r"meshes/MoM_Test_Plane-TestPlane.msh")
 # mesh = meshio.read(r"meshes/plane45pointsFDQ_experimental.msh")
 # mesh = meshio.read(r"meshes/plane35pointsDelaunay.msh")
+# mesh = meshio.read(r"meshes/plane35pointsDelaunay.msh")
 # mesh = meshio.read(r"meshes/sphere40points.msh")
-nop = 7
+nop = 3
 configuration_name = "Plane_50Points_nop7"
 
 points_np = mesh.points.astype(np.float64)
@@ -73,7 +74,6 @@ avg_side_length = avg_side_length / len(triangles_np)
 avg_side_length_ti = ti.field(dtype=ti.f64, shape=())
 avg_side_length_ti[None] = avg_side_length
 
-# Create Taichi fields
 n_points = points_np.shape[0]
 points_ti = ti.Vector.field(3, dtype=ti.f64, shape=n_points)
 
@@ -133,12 +133,12 @@ elif nop == 12:
 elif nop == 16:
     # Symmetric 16-point rule (Weights sum to 1.0)
     w_gauss = ti.Vector([
-        0.14431560767778,                                     # Centroid (1 point)
-        0.09509163426728, 0.09509163426728, 0.09509163426728, # Orbit 1 (3 points)
-        0.10321735053038, 0.10321735053038, 0.10321735053038, # Orbit 2 (3 points)
-        0.03245846762319, 0.03245846762319, 0.03245846762319, # Orbit 3 (3 points)
-        0.02723063468594, 0.02723063468594, 0.02723063468594, # Orbit 4 (3 points)
-        0.02723063468594, 0.02723063468594, 0.02723063468594  # Orbit 4 cont. (6 total)
+        0.14431560767778,                                     
+        0.09509163426728, 0.09509163426728, 0.09509163426728, 
+        0.10321735053038, 0.10321735053038, 0.10321735053038, 
+        0.03245846762319, 0.03245846762319, 0.03245846762319, 
+        0.02723063468594, 0.02723063468594, 0.02723063468594, 
+        0.02723063468594, 0.02723063468594, 0.02723063468594  
     ])
     
     # Coordinates (Barycentric)
@@ -271,7 +271,6 @@ def func_singularity(rp: vec3, rq: vec3, rp_type: ti.i32, rq_type: ti.i32,
         final_result = first_term
         
     else:
-        # OUTER TERM: Analytical integration using I₁ and I₂
         tri0 = points_ti[triangles_ti[tin][0]]
         tri1 = points_ti[triangles_ti[tin][1]]
         tri2 = points_ti[triangles_ti[tin][2]]
@@ -283,16 +282,13 @@ def func_singularity(rp: vec3, rq: vec3, rp_type: ti.i32, rq_type: ti.i32,
         I1_I2_result = get_I1I2(tin, rp, ncap)
         I1 = I1_I2_result.I1
         I2 = I1_I2_result.I2
-        
-        # Second term: (jωμ/4) * ρ̂_m · [sign_rq * (I₁ + (rp - rq_free) * I₂)]
+
         inner_integral = sign_rq * (I1 + (rp - rq_free) * I2)
         second_term_scalar = tm.dot(rho_rp, inner_integral)
         second_term = vec2(0, w * u / 4) * second_term_scalar
-        
-        # Third term: [sign_rp * sign_rq * j/(ωε)] * I₂
+
         third_term = vec2(0, 1 / (w * epsilon)) * sign_rp * sign_rq * I2
         
-        # Divide by source triangle area
         final_result = (second_term - third_term) / triangle_properties[tin].area
     
     return final_result
@@ -313,60 +309,45 @@ def get_I1I2(tin: ti.i32, obv_point: vec3, ncap: vec3) -> singularity_I1I2:
         p1 = points_ti[triangles_ti[tin][i]]
         p2 = points_ti[triangles_ti[tin][(i + 1) % 3]]
             
-        # Edge direction
         lcap = (p2 - p1)
         lcap = lcap / tm.length(lcap)
-        
-        # Perpendicular direction in plane
+
         ucap = tm.cross(lcap, ncap)
-        
-        # Small offset to avoid singularity
+
         obv_point_p = obv_point #+ ucap * eps
-        
-        # Project points onto plane
+
         rho = get_component_in_plane(ncap, obv_point_p)
         rho_p1 = get_component_in_plane(ncap, p1)
         rho_p2 = get_component_in_plane(ncap, p2)
-        
-        # Signed distances along edge
+
         l_plus = tm.dot((rho_p2 - rho), lcap)
         l_minus = tm.dot((rho_p1 - rho), lcap)
-        
-        # Perpendicular distance from observation to edge
+
         p0 = ti.abs(tm.dot(ucap, rho_p1 - rho))
-        
-        # Distances to edge endpoints
+
         p_plus = tm.length(rho_p2 - rho)
         p_minus = tm.length(rho_p1 - rho)
-        
-        # Unit vector perpendicular to edge
+
         p0_cap = ((rho_p1 - rho) - l_minus * lcap)
-        p0_cap /= (p0 + eps)  # Add eps for safety
-        
-        # Distance from observation to triangle plane
+        p0_cap /= (p0 + eps)  
+
         d = ti.abs(tm.dot(ncap, obv_point_p - p1))
-        
-        # 3D distances
         R0 = tm.sqrt(p0*p0 + d*d)
         Rplus = tm.sqrt(p_plus*p_plus + d*d)
         Rminus = tm.sqrt(p_minus*p_minus + d*d)
         
-        # Logarithmic term
+
         common_term = tm.log((Rplus + l_plus + eps) / (Rminus + l_minus + eps))
         
-        # I1 contribution (vector)
+
         I1_value = (R0*R0) * common_term + l_plus*Rplus - l_minus*Rminus
         I1 += I1_value * ucap
         
-        # I2 contribution (scalar) - CORRECTED!
-        # p̂⁰ · û should multiply the entire expression
         p0_cap_dot_u = tm.dot(p0_cap, ucap)
-        
-        # Arctangent terms - USE atan, NOT atan2
+
         tan_term1 = tm.atan2((p0 * l_plus) , (R0*R0 + d*Rplus + eps))
         tan_term2 = tm.atan2((p0 * l_minus) , (R0*R0 + d*Rminus + eps))
-        
-        # I2 formula: p̂⁰·û [p⁰ ln(...) - d(atan - atan)]
+
         log_term = p0 * common_term
         atan_term = d * (tan_term1 - tan_term2)
         I2 += p0_cap_dot_u * (log_term - atan_term)
@@ -426,27 +407,25 @@ def double_integration(vout1: vec3, vout2: vec3, vout3: vec3,
 
 @ti.func
 def electric_field(r: vec3) -> ti.types.matrix(3, 2, float):
-    # Returns a 3x2 matrix where each row is a complex number (real, imag)
     phase = c_exp_j(-k * r[2])
     result = ti.Matrix([
-        [1.0 * phase[0], 1.0 * phase[1]],  # x-component (complex)
-        [0.0, 0.0],                         # y-component (complex)
-        [0.0, 0.0]                          # z-component (complex)
+        [1.0 * phase[0], 1.0 * phase[1]],  
+        [0.0, 0.0],                         
+        [0.0, 0.0]                          
     ])
     # result = ti.Matrix([
-    #     [0.0, 0.0],  # x-component (complex)
-    #     [1.0 * phase[0], 1.0 * phase[1]],                         # y-component (complex)
-    #     [0.0, 0.0]                          # z-component (complex)
+    #     [0.0, 0.0],  
+    #     [1.0 * phase[0], 1.0 * phase[1]],                         
+    #     [0.0, 0.0]                          
     # ])
     return result
 
 @ti.func
 def complex_dot(v_real: vec3, v_complex) -> vec2:
-    # Dot product of real vec3 with complex vec3 (represented as 3x2 matrix)
     result = vec2(0.0, 0.0)
     for i in range(3):
-        result[0] += v_real[i] * v_complex[i, 0]  # real part
-        result[1] += v_real[i] * v_complex[i, 1]  # imaginary part
+        result[0] += v_real[i] * v_complex[i, 0] 
+        result[1] += v_real[i] * v_complex[i, 1] 
     return result
 
 @ti.func
@@ -539,8 +518,8 @@ print(all_basis_ti.shape[0])
 
 
 N = all_basis_ti.shape[0]
-Z = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(N, N))  # Complex as vec2 (real, imag)
-I = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(N,))    # Complex as vec2
+Z = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(N, N)) 
+I = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(N,))   
 
 @ti.kernel
 def get_Z():
@@ -698,39 +677,26 @@ def complexVec_mul_complexScalar(complexVec: ti.types.matrix(3, 2, ti.f64), comp
 def far_field(rhat: vec3, m: ti.i32, r: ti.f64):
     mth_basis = all_basis_ti[m]
     
-    # Initialize complex 3D vector (real/imaginary parts for x, y, z)
     result_neg = ti.Matrix([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
     result_pos = ti.Matrix([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
     
-    # Current coefficient for this basis function
     I_m = coeff_ti[m]
 
     for i in range(nop):
-        # Contribution from Negative Triangle (T-)
         location_neg = alpha[i]*mth_basis.free_neg + beta[i]*mth_basis.cp1 + gamma[i]*mth_basis.cp2
         rho_neg = location_neg - mth_basis.free_neg
-        # FIX: Use absolute location for the phase factor e^(j k r_hat . r')
         phase_neg = c_exp_j(k * tm.dot(rhat, location_neg))
         result_neg += realVec_mul_complexScalar(w_gauss[i] * rho_neg, phase_neg)
 
-        # Contribution from Positive Triangle (T+)
         location_pos = alpha[i]*mth_basis.free_pos + beta[i]*mth_basis.cp1 + gamma[i]*mth_basis.cp2
         rho_pos = mth_basis.free_pos - location_pos
-        # FIX: Use absolute location for the phase factor
         phase_pos = c_exp_j(k * tm.dot(rhat, location_pos))
         result_pos += realVec_mul_complexScalar(w_gauss[i] * rho_pos, phase_pos)
     
-    # FIX: Integration requires multiplying the weighted sum by the Area
-    # (The 1/Area in the RWG basis cancels this, but we keep it explicit for clarity)
     integral_neg = complexVec_mul_complexScalar(result_neg, vec2(mth_basis.neg_area, 0.0))
     integral_pos = complexVec_mul_complexScalar(result_pos, vec2(mth_basis.pos_area, 0.0))
-    
-    # Combined vector potential contribution (including current I_m)
-    # The factor of 8*pi accounts for the 4*pi in the Green's function 
-    # and the 1/2 in the RWG definition (L/2A).
     combined_integral = complexVec_mul_complexScalar(integral_neg + integral_pos, I_m)
     
-    # Leading constant: (-j * omega * mu * L) / (8 * pi * r) * e^(-jkr)
     const_factor = tm.cmul(vec2(0.0, -w * u), c_exp_j(-k * r)) * (mth_basis.edge_length / (8.0 * tm.pi * r))
     
     return complexVec_mul_complexScalar(combined_integral, const_factor)
@@ -740,7 +706,6 @@ theta_np = np.linspace(-np.pi, np.pi, num=observations)
 r = 1.0
 phi = 0.0
 
-# Taichi fields for results
 E_field = ti.field(dtype=ti.types.vector(2, ti.f64), shape=(observations, 3))  # Complex E-field vectors
 E_magnitude = ti.field(dtype=ti.f64, shape=(observations,))
 
@@ -750,17 +715,14 @@ def compute_far_field(theta_values: ti.types.ndarray(), r_val: ti.f64, phi_val: 
     for obs_idx in range(observations):
         angle = theta_values[obs_idx]
         
-        # Standard spherical coordinates unit vectors
         sin_th, cos_th = ti.sin(angle), ti.cos(angle)
         sin_ph, cos_ph = ti.sin(phi_val), ti.cos(phi_val)
         
         rhat = vec3(sin_th * cos_ph, sin_th * sin_ph, cos_th)
         
-        # Unit vectors for E_theta and E_phi projection
         theta_hat = vec3(cos_th * cos_ph, cos_th * sin_ph, -sin_th)
         phi_hat   = vec3(-sin_ph, cos_ph, 0.0)
         
-        # Sum contributions from all basis functions
         E_total = ti.Matrix([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
         for m in range(N):
             m_int = ti.cast(m, ti.i32)
@@ -769,39 +731,30 @@ def compute_far_field(theta_values: ti.types.ndarray(), r_val: ti.f64, phi_val: 
                 E_total[j, 0] += E_m[j, 0]
                 E_total[j, 1] += E_m[j, 1]
         
-        # FIX: Transverse Projection
-        # Project the 3D complex E-field vector onto theta and phi unit vectors
         E_th_comp = vec2(0.0, 0.0)
         E_ph_comp = vec2(0.0, 0.0)
         
         for j in ti.static(range(3)):
             E_th_comp += vec2(E_total[j, 0] * theta_hat[j], E_total[j, 1] * theta_hat[j])
             E_ph_comp += vec2(E_total[j, 0] * phi_hat[j], E_total[j, 1] * phi_hat[j])
-        
-        # Store the complex components for later use if needed
-        # (Optional: you can expand E_field to store theta/phi components specifically)
+
         for j in ti.static(range(3)):
             E_field[obs_idx, j] = vec2(E_total[j, 0], E_total[j, 1])
         
-        # FIX: Magnitude calculation using transverse components only
-        # mag = sqrt(|E_theta|^2 + |E_phi|^2)
+
         mag_sq = (E_th_comp[0]**2 + E_th_comp[1]**2) + (E_ph_comp[0]**2 + E_ph_comp[1]**2)
         E_magnitude[obs_idx] = ti.sqrt(mag_sq)
 
-# Run the computation
 print("Computing far field pattern with Taichi...")
 compute_far_field(theta_np, r, phi)
 
-# Extract results to NumPy
 E_mag = E_magnitude.to_numpy()
 
-# Normalize and convert to dB
 eps = 1e-16
 E_mag_norm = E_mag / (np.max(E_mag) + eps)
 E_dB = 20.0 * np.log10(E_mag_norm + eps)
 E_dB_clipped = np.clip(E_dB, a_min=-60.0, a_max=None)
 
-# For plotting
 angles = theta_np
 
 print("Far field computation complete!")
