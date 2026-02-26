@@ -89,8 +89,8 @@ wavenumber = 1
 
 ############################################################# READING AND ORGANIZING MESH
 
-mesh = meshio.read(r"meshes/comparison_quad.msh")
-
+# mesh = meshio.read(r"meshes/comparison_quad.msh")
+mesh = meshio.read(r"meshes/square.msh")
 reconstructed_coordinates = mesh.points.astype(np.float64)
 reconstructed_quad = mesh.cells_dict["quad"].astype(np.int32)
 for i in range(len(reconstructed_quad)):
@@ -110,11 +110,17 @@ cy = np.round(centroids[:, 1], decimals=6)
 sorted_indices = np.lexsort((cx, cy))
 reconstructed_quad = reconstructed_quad[sorted_indices]
 
-unique_y = np.unique(np.round(cy, decimals=6))
-unique_x = np.unique(np.round(cx, decimals=6))
+# centroids = reconstructed_coordinates[reconstructed_quad[:,0]].mean(axis=1)  # (N, 3)
+# cx = np.round(centroids[:, 0], decimals=6)
+# cy = np.round(centroids[:, 1], decimals=6)
+# unique_y = np.unique(np.round(cy, decimals=6))
+# unique_x = np.unique(np.round(cx, decimals=6))
 
-n_rows = len(unique_y)
-n_cols = len(unique_x)
+# n_rows = len(unique_y)
+# n_cols = len(unique_x)
+# print(n_rows, n_cols)
+n_rows = int(np.sqrt(reconstructed_quad.shape[0]))
+n_cols = n_rows
 
 print(n_rows, n_cols)
 
@@ -138,11 +144,32 @@ for i in range(0,len(reconstructed_coordinates)):
 for i in range(0,len(reconstructed_quad)):
     reconstructed_quad_ti[i] = reconstructed_quad[i]
 
-surface1_coordinates = reconstructed_coordinates + [0,0,1]
-surface2_coordinates = reconstructed_coordinates + [0,0,2]
+###########################################################################
+mesh2 = meshio.read(r"meshes/comparison_quad.msh")
+reconstructed_coordinates2 = mesh2.points.astype(np.float64)
+reconstructed_quad2 = mesh2.cells_dict["quad"].astype(np.int32)
+for i in range(len(reconstructed_quad2)):
+    quad = reconstructed_quad2[i]
+    pts = reconstructed_coordinates2[quad]  # shape (4, 3)
+    
+    centroid2 = pts.mean(axis=0)
+    angles = np.arctan2(pts[:, 1] - centroid2[1], pts[:, 0] - centroid2[0])
+    sorted_indices = np.argsort(angles)  # counter-clockwise order
+    
+    reconstructed_quad2[i] = quad[sorted_indices]
 
-surface1_quad = mesh.cells_dict["quad"].astype(np.int32)
-surface2_quad = mesh.cells_dict["quad"].astype(np.int32)
+centroids2 = reconstructed_coordinates2[reconstructed_quad2[:,0]]#.mean(axis=1)  # (N, 3)
+cx = np.round(centroids2[:, 0], decimals=6)
+cy = np.round(centroids2[:, 1], decimals=6)
+
+sorted_indices = np.lexsort((cx, cy))
+reconstructed_quad2 = reconstructed_quad2[sorted_indices]
+
+surface1_coordinates = reconstructed_coordinates2 + [0,0,1]
+surface2_coordinates = reconstructed_coordinates2 + [0,0,2]
+
+surface1_quad = mesh2.cells_dict["quad"].astype(np.int32)
+surface2_quad = mesh2.cells_dict["quad"].astype(np.int32)
 
 surface1_coordinates_ti = ti.Vector.field(n=3, dtype=ti.f64, shape=(len(surface1_coordinates)))
 surface1_quad_ti = ti.Vector.field(n=4, dtype=ti.int32, shape=(len(surface1_quad)))
@@ -179,16 +206,28 @@ complex_electric_field = ti.types.struct(x = vec2,
                                          y = vec2,
                                          z = vec2)
 
+# @ti.func
+# def electric_field(r: vec3) -> complex_electric_field:
+#     phase = c_exp_j(-wavenumber * r[2])
+#     result = complex_electric_field(
+#         x = vec2(r[0] * phase[0], 1.0 * phase[1]),
+#         y = vec2(0,0),
+#         z = vec2(0,0)
+#     )
+#     return result
 @ti.func
 def electric_field(r: vec3) -> complex_electric_field:
-    phase = c_exp_j(-wavenumber * r[2])
+    # Gaussian beam with some spatial variation
+    x, y, z = r[0], r[1], r[2]
+    w = 0.3  # beam width
+    amplitude = ti.exp(-(x**2 + y**2) / (w**2))
+    phase = c_exp_j(-wavenumber * z)
     result = complex_electric_field(
-        x = vec2(1.0 * phase[0], 1.0 * phase[1]),
-        y = vec2(0,0),
-        z = vec2(0,0)
+        x = vec2(amplitude * phase[0], amplitude * phase[1]),
+        y = vec2(0, 0),
+        z = vec2(0, 0)
     )
     return result
-
 # r is observation point and rprime is source 
 @ti.func
 def green_func(r: vec3, rprime: vec3) -> vec2:
@@ -373,21 +412,43 @@ gn = 0
 vn = 0
 
 alpha_n = 1
-
 Nd = N_quad  # 100
-
-Mx = un[:Nd]          # first half = Mx coefficients
-My = un[Nd:]          # second half = My coefficients
-
-Mx_2d = Mx.reshape(n_rows, n_cols)  # (10, 10)
-My_2d = My.reshape(n_rows, n_cols)  # (10, 10)
 beta_n = 0
 count = 0
+
+def line_search(un, vn, A1, A2, f1_abs, f2_abs, eta1, eta2):
+    alpha = 1.0
+    rho = 0.5       # reduction factor
+    max_iter = 50
+    
+    # Current cost
+    r1 = np.abs(A1 @ un)**2 - f1_abs**2
+    r2 = np.abs(A2 @ un)**2 - f2_abs**2
+    c0 = eta1 * np.linalg.norm(r1)**2 + eta2 * np.linalg.norm(r2)**2
+    
+    for _ in range(max_iter):
+        un_new = un - alpha * vn   # note: gradient descent so subtract
+        r1_new = np.abs(A1 @ un_new)**2 - f1_abs**2
+        r2_new = np.abs(A2 @ un_new)**2 - f2_abs**2
+        c_new = eta1 * np.linalg.norm(r1_new)**2 + eta2 * np.linalg.norm(r2_new)**2
+        
+        if c_new < c0:
+            return alpha
+        alpha *= rho
+    
+    return alpha
+
 while error > tolerance_factor:
     r1 = (np.abs(np.matmul(A1,un)))**2 - f1_abs**2
     r2 = (np.abs(np.matmul(A2,un)))**2 - f2_abs**2
     c1 = eta1*((np.linalg.norm(r1))**2)
     c2 = eta2*((np.linalg.norm(r2))**2)
+
+    Mx = un[:Nd]          # first half = Mx coefficients
+    My = un[Nd:]          # second half = My coefficients
+
+    Mx_2d = Mx.reshape(n_rows, n_cols)  # (10, 10)
+    My_2d = My.reshape(n_rows, n_cols)  # (10, 10)
 
     # For Mx
     grad_y_x, grad_x_x = np.gradient(Mx_2d, del_y, del_x)
@@ -431,12 +492,41 @@ while error > tolerance_factor:
         beta_n = numerator / denominator
     else: beta_n = 0
 
-    vn = vn*beta_n + gn
+    vn = gn + beta_n * vn
     un_previous = un
-    un = un + alpha_n*vn
+    # un = un + alpha_n*vn
+    alpha_n = line_search(un, vn, A1, A2, f1_abs, f2_abs, eta1, eta2)
+    un = un - alpha_n * vn  # subtract because gn is gradient (descending)
     error = np.abs(np.linalg.norm(un-un_previous)/np.linalg.norm(un))
     count += 1
 
     if count > 1000:
-        print(error)
+        print("Not Converging",error)
         break
+
+print(error, count)
+
+# Split and reshape un into 2D
+Mx_2d = un[:N_quad].reshape(n_rows, n_cols)
+My_2d = un[N_quad:].reshape(n_rows, n_cols)
+
+# Choose what to plot - magnitude of Mx
+plot_data = np.abs(Mx_2d)  # or np.angle(Mx_2d) for phase
+
+fig, ax = plt.subplots(figsize=(8, 8))
+
+# Get x and y coordinates of quad centroids
+centroids_sorted = reconstructed_coordinates[reconstructed_quad_2d[:, :, 0]]
+X = centroids_sorted[:, :, 0]  # shape (n_rows, n_cols)
+Y = centroids_sorted[:, :, 1]  # shape (n_rows, n_cols)
+
+# pcolormesh plots a 2D grid with color per cell
+mesh_plot = ax.pcolormesh(X, Y, plot_data, cmap='jet', shading='auto')
+plt.colorbar(mesh_plot, ax=ax, label='|Mx|')
+
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_title('Equivalent Current Distribution |Mx|')
+ax.set_aspect('equal')
+plt.tight_layout()
+plt.show()
