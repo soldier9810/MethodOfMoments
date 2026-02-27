@@ -511,7 +511,7 @@ Mx_2d = un[:N_quad].reshape(n_rows, n_cols)
 My_2d = un[N_quad:].reshape(n_rows, n_cols)
 
 # Choose what to plot - magnitude of Mx
-plot_data = np.abs(Mx_2d)  # or np.angle(Mx_2d) for phase
+plot_data = np.abs(Mx_2d**2) + np.abs(My_2d**2)# or np.angle(Mx_2d) for phase
 
 fig, ax = plt.subplots(figsize=(8, 8))
 
