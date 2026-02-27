@@ -4,6 +4,7 @@ import numpy as np
 import meshio
 from collections import defaultdict
 import matplotlib.pyplot as plt
+import pyvista as pv
 
 ti.init(arch=ti.cpu, default_fp=ti.f64)
 vec2 = ti.types.vector(2, ti.f64)
@@ -506,27 +507,72 @@ while error > tolerance_factor:
 
 print(error, count)
 
-# Split and reshape un into 2D
+# # Split and reshape un into 2D
+# Mx_2d = un[:N_quad].reshape(n_rows, n_cols)
+# My_2d = un[N_quad:].reshape(n_rows, n_cols)
+
+# # Choose what to plot - magnitude of Mx
+# plot_data = np.abs(Mx_2d**2) + np.abs(My_2d**2)# or np.angle(Mx_2d) for phase
+
+# fig, ax = plt.subplots(figsize=(8, 8))
+
+# # Get x and y coordinates of quad centroids
+# centroids_sorted = reconstructed_coordinates[reconstructed_quad_2d[:, :, 0]]
+# X = centroids_sorted[:, :, 0]  # shape (n_rows, n_cols)
+# Y = centroids_sorted[:, :, 1]  # shape (n_rows, n_cols)
+
+# # pcolormesh plots a 2D grid with color per cell
+# mesh_plot = ax.pcolormesh(X, Y, plot_data, cmap='jet', shading='auto')
+# plt.colorbar(mesh_plot, ax=ax, label='|Mx|')
+
+# ax.set_xlabel('X')
+# ax.set_ylabel('Y')
+# ax.set_title('Equivalent Current Distribution |Mx|')
+# ax.set_aspect('equal')
+# plt.tight_layout()
+# plt.show()
+
+# --- Split field ---
 Mx_2d = un[:N_quad].reshape(n_rows, n_cols)
 My_2d = un[N_quad:].reshape(n_rows, n_cols)
 
-# Choose what to plot - magnitude of Mx
-plot_data = np.abs(Mx_2d**2) + np.abs(My_2d**2)# or np.angle(Mx_2d) for phase
+# Magnitude
+plot_data = np.abs(Mx_2d**2) + np.abs(My_2d**2)
 
-fig, ax = plt.subplots(figsize=(8, 8))
+# Flatten to match cell ordering
+cell_data = plot_data.ravel(order='C')   # Make sure ordering matches your mesh
 
-# Get x and y coordinates of quad centroids
-centroids_sorted = reconstructed_coordinates[reconstructed_quad_2d[:, :, 0]]
-X = centroids_sorted[:, :, 0]  # shape (n_rows, n_cols)
-Y = centroids_sorted[:, :, 1]  # shape (n_rows, n_cols)
+# --- Build PyVista Quad Mesh ---
 
-# pcolormesh plots a 2D grid with color per cell
-mesh_plot = ax.pcolormesh(X, Y, plot_data, cmap='jet', shading='auto')
-plt.colorbar(mesh_plot, ax=ax, label='|Mx|')
+# Number of quads
+n_cells = reconstructed_quad.shape[0]
 
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_title('Equivalent Current Distribution |Mx|')
-ax.set_aspect('equal')
-plt.tight_layout()
-plt.show()
+# PyVista expects:
+# [4, p0, p1, p2, p3, 4, p0, p1, p2, p3, ...]
+cells = np.hstack([
+    np.full((n_cells, 1), 4),
+    reconstructed_quad
+]).astype(np.int64)
+
+cells = cells.flatten()
+
+# Cell types (9 = VTK_QUAD)
+celltypes = np.full(n_cells, pv.CellType.QUAD)
+
+# Create mesh
+grid = pv.UnstructuredGrid(cells, celltypes, reconstructed_coordinates)
+
+# Attach cell data
+grid.cell_data["|M|"] = cell_data
+
+# --- Plot ---
+plotter = pv.Plotter()
+plotter.add_mesh(
+    grid,
+    scalars="|M|",
+    cmap="jet",
+    show_edges=False
+)
+
+plotter.add_scalar_bar(title="|M|")
+plotter.show()
