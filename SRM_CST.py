@@ -95,7 +95,7 @@ wavenumber = 2*np.pi/wavelength
 ############################################################# READING AND ORGANIZING MESH
 
 # mesh = meshio.read(r"meshes/comparison_quad.msh")
-mesh = meshio.read(r"horn_parab_1.msh")
+mesh = meshio.read(r"horn_parab_1_62.msh")
 reconstructed_coordinates = mesh.points.astype(np.float64)
 reconstructed_quad = mesh.cells_dict["quad"].astype(np.int32)
 
@@ -119,21 +119,17 @@ cy = np.round(centroids[:, 1], decimals=6)
 sorted_indices = np.lexsort((cx, cy))
 reconstructed_quad = reconstructed_quad[sorted_indices]
 
-# centroids = reconstructed_coordinates[reconstructed_quad[:,0]].mean(axis=1)  # (N, 3)
-# cx = np.round(centroids[:, 0], decimals=6)
-# cy = np.round(centroids[:, 1], decimals=6)
-# unique_y = np.unique(np.round(cy, decimals=6))
-# unique_x = np.unique(np.round(cx, decimals=6))
-
-# n_rows = len(unique_y)
-# n_cols = len(unique_x)
-# print(n_rows, n_cols)
-n_rows = int(np.sqrt(reconstructed_quad.shape[0]))
-n_cols = n_rows
+min_corner = np.min(reconstructed_coordinates, axis=0)
+max_corner = np.max(reconstructed_coordinates, axis=0)
+print(min_corner, max_corner)
+print(len(reconstructed_quad))
+mesh_del_x = abs(reconstructed_coordinates[reconstructed_quad[0][1]][0] - reconstructed_coordinates[reconstructed_quad[0][0]][0])
+mesh_del_y = abs(reconstructed_coordinates[reconstructed_quad[0][2]][1] - reconstructed_coordinates[reconstructed_quad[0][1]][1])
+print(mesh_del_x, mesh_del_y)
+n_rows = int((max_corner[1] - min_corner[1])/mesh_del_y)
+n_cols = int((max_corner[0] - min_corner[0])/mesh_del_x)
 
 print(n_rows, n_cols)
-
-# reconstructed_quad_2d = reconstructed_quad.reshape(n_rows, n_cols, 4)
 
 #########################################################################
 
@@ -154,7 +150,7 @@ for i in range(0,len(reconstructed_quad)):
     reconstructed_quad_ti[i] = reconstructed_quad[i]
 
 ###########################################################################
-
+#r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_120_LARGERPLANE.txt",
 surface1_measurements = pd.read_csv(
     r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_120_LARGERPLANE.txt",
     sep=r"\s+",      # split on whitespace
