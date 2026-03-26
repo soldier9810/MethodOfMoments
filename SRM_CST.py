@@ -12,7 +12,7 @@ ti.init(arch=ti.cpu, default_fp=ti.f64)
 vec2 = ti.types.vector(2, ti.f64)
 vec3 = ti.types.vector(3, ti.f64)
 
-nop = 7
+nop = 16
 ############## 7 point
 if nop == 7:
     alpha = ti.Vector([0.3333, 0.0597, 0.4701, 0.4701, 0.7974, 0.1013, 0.1013])
@@ -95,7 +95,7 @@ wavenumber = 2*np.pi/wavelength
 ############################################################# READING AND ORGANIZING MESH
 
 # mesh = meshio.read(r"meshes/comparison_quad.msh")
-mesh = meshio.read(r"horn_parab_1_62.msh")
+mesh = meshio.read(r"horn_parab_1_3.msh")
 reconstructed_coordinates = mesh.points.astype(np.float64)
 reconstructed_quad = mesh.cells_dict["quad"].astype(np.int32)
 
@@ -136,10 +136,11 @@ print(n_rows, n_cols)
 p0 = reconstructed_coordinates[reconstructed_quad[0][0]]
 p1 = reconstructed_coordinates[reconstructed_quad[0][1]]
 del_x = np.linalg.norm(p0-p1)
-
+#del_x = round(del_x, 2)
 p2 = reconstructed_coordinates[reconstructed_quad[0][2]]
 del_y = np.linalg.norm(p2-p1)
-
+#del_y = round(del_y, 2)
+print(del_x, del_y)
 reconstructed_coordinates_ti = ti.Vector.field(n=3, dtype=ti.f64, shape=(len(reconstructed_coordinates)))
 reconstructed_quad_ti = ti.Vector.field(n=4, dtype=ti.int32, shape=(len(reconstructed_quad)))
 
@@ -152,7 +153,7 @@ for i in range(0,len(reconstructed_quad)):
 ###########################################################################
 #r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_120_LARGERPLANE.txt",
 surface1_measurements = pd.read_csv(
-    r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_120_LARGERPLANE.txt",
+    r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_200_LARGERPLANE.txt",
     sep=r"\s+",      # split on whitespace
     skiprows=[0,1],       # skip the dashed line
     engine="python",
@@ -179,7 +180,7 @@ gc.collect()
 
 
 surface2_measurements = pd.read_csv(
-    r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_160_LARGERPLANE.txt",
+    r"Elec_field/HORNANTENNA_PARABOLIC REFLECTOR/HORN_240_LARGERPLANE.txt",
     sep=r"\s+",      # split on whitespace
     skiprows=[0,1],       # skip the dashed line
     engine="python",
@@ -344,7 +345,7 @@ f2_abs = f2_abs_n
 
 eta1 = (np.linalg.norm(f1_abs**2))**2
 eta2 = (np.linalg.norm(f2_abs**2))**2
-
+print("eta:", eta1, eta2)
 u_BP = matvec_A1H(f1_abs)
 zetas = np.linspace(0.01, 10, 1000)
 costs = []
@@ -357,7 +358,7 @@ for zeta in zetas:
 zeta = zetas[np.argmin(costs)]
 un = zeta * u_BP
 
-tolerance_factor = 1e-3
+tolerance_factor = 1e-7
 error = 1e3
 area_d = del_y*n_cols*del_x*n_rows
 
@@ -370,27 +371,66 @@ Nd = N_quad
 beta_n = 0
 count = 0
 
-def line_search(un, vn, f1_abs, f2_abs, eta1, eta2):
+# def line_search(un, vn, f1_abs, f2_abs, eta1, eta2):
+#     alpha = 1.0
+#     rho = 0.5      
+#     max_iter = 50
+    
+#     r1 = np.abs(matvec_A1(un))**2 - f1_abs**2
+#     r2 = np.abs(matvec_A2(un))**2 - f2_abs**2
+#     c0 = eta1 * np.linalg.norm(r1)**2 + eta2 * np.linalg.norm(r2)**2
+    
+#     for _ in range(max_iter):
+#         un_new = un + alpha * vn   
+#         r1_new = np.abs(matvec_A1(un_new))**2 - f1_abs**2
+#         r2_new = np.abs(matvec_A2(un_new))**2 - f2_abs**2
+#         c_new = eta1 * np.linalg.norm(r1_new)**2 + eta2 * np.linalg.norm(r2_new)**2
+        
+#         if c_new < c0:
+#             return alpha
+#         alpha *= rho
+    
+#     return alpha
+def line_search(un, vn, f1_abs, f2_abs, eta1, eta2, b_n_sq, del_sqr, del_x, del_y, n_rows, n_cols):
     alpha = 1.0
     rho = 0.5      
     max_iter = 50
     
+    # Base Cost
     r1 = np.abs(matvec_A1(un))**2 - f1_abs**2
     r2 = np.abs(matvec_A2(un))**2 - f2_abs**2
-    c0 = eta1 * np.linalg.norm(r1)**2 + eta2 * np.linalg.norm(r2)**2
+    C_data = eta1 * np.linalg.norm(r1)**2 + eta2 * np.linalg.norm(r2)**2
+    # C_MR is technically exactly 1.0 for 'un' at the current iteration by definition of b_n
+    c0 = C_data * 1.0 
     
     for _ in range(max_iter):
-        un_new = un - alpha * vn   
+        un_new = un + alpha * vn   
+        
+        # 1. Calculate new data mismatch
         r1_new = np.abs(matvec_A1(un_new))**2 - f1_abs**2
         r2_new = np.abs(matvec_A2(un_new))**2 - f2_abs**2
-        c_new = eta1 * np.linalg.norm(r1_new)**2 + eta2 * np.linalg.norm(r2_new)**2
+        C_data_new = eta1 * np.linalg.norm(r1_new)**2 + eta2 * np.linalg.norm(r2_new)**2
+        
+        # 2. Calculate new MR penalty using fixed b_n from the outer loop
+        Mx_new = un_new[:N_quad].reshape(n_rows, n_cols)
+        My_new = un_new[N_quad:].reshape(n_rows, n_cols)
+        
+        grad_y_x_new, grad_x_x_new = np.gradient(Mx_new, del_y, del_x)
+        grad_y_y_new, grad_x_y_new = np.gradient(My_new, del_y, del_x)
+        
+        grad_mag_sq_new = np.abs(grad_x_x_new)**2 + np.abs(grad_y_x_new)**2 + np.abs(grad_x_y_new)**2 + np.abs(grad_y_y_new)**2
+        
+        # Area integral for C_MR
+        C_MR_new = np.sum(b_n_sq * (grad_mag_sq_new + del_sqr)) * (del_x * del_y)
+        
+        # 3. Total new cost
+        c_new = C_data_new * C_MR_new
         
         if c_new < c0:
             return alpha
         alpha *= rho
     
     return alpha
-
 while error > tolerance_factor:
     r1 = (np.abs(matvec_A1(un)))**2 - f1_abs**2
     r2 = (np.abs(matvec_A2(un)))**2 - f2_abs**2
@@ -412,7 +452,8 @@ while error > tolerance_factor:
     grad_mag_sq = grad_mag_sq_x + grad_mag_sq_y
 
     del_sqr = (c1 + c2) / (2 * del_x * del_y)
-    b_n = (1 / np.sqrt(area_d)) * (grad_mag_sq + del_sqr)**(-0.5) 
+    b_n = (1 / np.sqrt(area_d)) * (grad_mag_sq + del_sqr)**(-0.5)
+    print(b_n.shape)
 
     b_n_sq = b_n**2
 
@@ -430,6 +471,7 @@ while error > tolerance_factor:
 
     gn_previous = gn
     gn = term1 + term2 + term3
+    print("gn: ",np.linalg.norm(gn))
 
     g_flat = gn.conj().flatten()
     diff_flat = (gn - gn_previous).flatten()
@@ -440,13 +482,16 @@ while error > tolerance_factor:
     else: beta_n = 0
 
     vn = gn + beta_n * vn
+    print("vn value: ", np.linalg.norm(vn))
     un_previous = un
-    alpha_n = line_search(un, vn, f1_abs, f2_abs, eta1, eta2)
-    un = un - alpha_n * vn 
+    alpha_n = line_search(un, vn, f1_abs, f2_abs, eta1, eta2, b_n_sq, del_sqr, del_x, del_y, n_rows, n_cols)
+    print("alpha: ", alpha_n)
+    un = un + alpha_n * vn 
     error = np.abs(np.linalg.norm(un-un_previous)/np.linalg.norm(un))
     count += 1
+    print("error: ", error)
 
-    if count > 1000:
+    if count > 100:
         print("Not Converging",error)
         break
 
@@ -455,7 +500,11 @@ print(error, count)
 Mx_2d = un[:N_quad].reshape(n_rows, n_cols)
 My_2d = un[N_quad:].reshape(n_rows, n_cols)
 
-plot_data = np.abs(Mx_2d)**2 + np.abs(My_2d)**2   
+#plot_data = np.abs(Mx_2d)**2 + np.abs(My_2d)**2   
+mag = np.sqrt(np.abs(Mx_2d)**2 + np.abs(My_2d)**2)
+#plot_data_db = 20 * np.log10(mag / np.max(mag))
+# Then clip to e.g., -40dB for a clean visual
+plot_data = mag#np.clip(plot_data_db, -40, 0)
 cell_data = plot_data.ravel(order='C')
 
 n_cells = reconstructed_quad.shape[0]
@@ -475,3 +524,25 @@ plotter.view_xy()
 plotter.show()
 plotter.close()
 del plotter
+# Assuming R and d are defined
+R = 81.0 # example radius
+d = 0.005  # example depth
+a = d / (R**2)
+
+# Copy your coordinates to avoid modifying the original mesh data
+parabolic_coords = reconstructed_coordinates.copy()
+
+# Update the Z-axis (index 2) based on X (index 0) and Y (index 1)
+x = parabolic_coords[:, 0]
+y = parabolic_coords[:, 1]
+parabolic_coords[:, 2] = a * (x**2 + y**2)
+# Create mesh with new 3D parabolic coordinates
+pv_mesh = pv.PolyData(parabolic_coords, cells)
+
+# Add your SRM output data
+pv_mesh.cell_data["Current Magnitude"] = cell_data
+
+# Plot in 3D
+plotter = pv.Plotter()
+plotter.add_mesh(pv_mesh, scalars="Current Magnitude", cmap="jet")
+plotter.show()
