@@ -127,8 +127,12 @@ print(len(reconstructed_quad))
 mesh_del_x = abs(reconstructed_coordinates[reconstructed_quad[0][1]][0] - reconstructed_coordinates[reconstructed_quad[0][0]][0])
 mesh_del_y = abs(reconstructed_coordinates[reconstructed_quad[0][2]][1] - reconstructed_coordinates[reconstructed_quad[0][1]][1])
 print(mesh_del_x, mesh_del_y)
-n_rows = math.ceil((max_corner[1] - min_corner[1])/mesh_del_y)
-n_cols = math.floor((max_corner[0] - min_corner[0])/mesh_del_x)
+# n_rows = math.ceil((max_corner[1] - min_corner[1])/mesh_del_y)
+# n_cols = math.floor((max_corner[0] - min_corner[0])/mesh_del_x)
+
+eps = 1e-6
+n_rows = int((max_corner[1] - min_corner[1]) / mesh_del_y + eps)
+n_cols = int((max_corner[0] - min_corner[0]) / mesh_del_x + eps)
 
 print(n_rows, n_cols)
 
@@ -352,7 +356,7 @@ u_BP = matvec_A1H(f1_abs)
 duration = timedelta(seconds=time.perf_counter()-start_time)
 print(duration)
 
-zeta = 103.8347386081632
+zeta = 100
 un = zeta * u_BP
 
 tolerance_factor = 1e-7
